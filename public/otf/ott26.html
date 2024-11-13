@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>WebCodecs MP4 Decode - 1000_Words.mp4</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      margin-top: 20px;
+      max-width: 100%;
+      height: auto;
+    }
+    audio {
+      margin-top: 20px;
+      width: 100%;
+      max-width: 600px;
+    }
+  </style>
+</head>
+<body>
+  <h1>WebCodecs MP4 Decode - 1000_Words.mp4</h1>
+  
+  <!-- Canvas for video rendering -->
+  <canvas id="video-canvas"></canvas>
+  
+  <!-- Audio playback controls -->
+  <audio id="audio-player" controls preload="auto">
+    <source src="/video/1000_Words.mp4" type="audio/mp4" />
+    <p>如果您的浏览器不支持音频，请使用更新版本。</p>
+  </audio>
+  
+  <!-- Main thread JavaScript -->
+  <script type="module">
+    const audio = document.querySelector("#audio-player");
+    const canvas = document.querySelector("#video-canvas");
+    let worker = null;
+    let animationFrameId = null;
+    let updateIntervalId = null;
+
+    // 初始化 Web Worker 并启动视频解码
+    function initWorker() {
+      console.log("Initializing Web Worker...");
+      const offscreen = canvas.transferControlToOffscreen();
+      worker = new Worker("./play7.js");
+      
+      worker.onmessage = (event) => {
+        const message = event.data;
+        if (message.type === 'status') {
+          console.log("Worker status:", message.content);
+        }
+      };
+      
+      worker.onerror = (error) => {
+        console.error("Worker error:", error);
+      };
+      
+      worker.postMessage({
+        type: 'start',
+        dataUri: '/video/1000_Words.mp4',
+        rendererName: '2d',
+        canvas: offscreen
+      }, [offscreen]);
+      console.log("Worker started and message sent.");
+    }
+
+    // 发送 currentTime 到 Worker
+    function sendCurrentTime() {
+      if (worker && !audio.paused && !audio.ended) {
+        worker.postMessage({ type: 'timeUpdate', currentTime: audio.currentTime });
+      }
+    }
+
+    // 播放事件处理
+    audio.addEventListener('play', () => {
+      console.log("Audio play event triggered.");
+      if (!worker) {
+        initWorker();
+      }
+      if (!updateIntervalId) {
+        updateIntervalId = setInterval(sendCurrentTime, 100); // 每0.1秒发送一次时间更新
+      }
+      worker.postMessage({ type: 'play' });
+      console.log("Sent 'play' message to worker and started time updates.");
+    });
+
+    // 暂停事件处理
+    audio.addEventListener('pause', () => {
+      console.log("Audio pause event triggered.");
+      if (worker) {
+        worker.postMessage({ type: 'pause' });
+      }
+      if (updateIntervalId) {
+        clearInterval(updateIntervalId);
+        updateIntervalId = null;
+      }
+      console.log("Sent 'pause' message to worker and stopped time updates.");
+    });
+
+    // 音频播放结束处理
+    audio.addEventListener('ended', () => {
+      console.log("Audio ended event triggered.");
+      if (worker) {
+        worker.postMessage({ type: 'pause' });
+      }
+      if (updateIntervalId) {
+        clearInterval(updateIntervalId);
+        updateIntervalId = null;
+      }
+      console.log("Sent 'pause' message to worker after audio ended.");
+    });
+  </script>
+</body>
+</html>

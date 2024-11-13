@@ -1,0 +1,131 @@
+<!doctype html>
+
+<style>
+  body {
+    font-family: sans-serif;
+    color: #444;
+    font-weight: 300;
+    font-size:  larger;
+  }
+  button {
+    font-size: larger;
+  }
+  #controls {
+    margin-bottom: 10px;
+  }
+  #loading {
+    font-size: 2em;
+  }
+  .monospace {
+    font-family: monospace;
+  }
+  div#container {
+    margin: 0 auto 0 auto;
+    max-width: 60em;
+    padding: 1em 1.5em 1.3em 1.5em;
+  }
+  canvas {
+    outline: 1px solid black;
+  }
+</style>
+<div id=container>
+  <p>
+    This sample combines WebCodecs and WebAudio to create a media player that
+    renders synchronized audio and video.
+  </p>
+  <p>
+    Check out the <a href='../video-decode-display/'>Video Decoding and Display
+    </a> demo for a simpler introduction to video decoding and rendering. View
+    <a href='https://youtu.be/U8T5U8sN5d4?t=1572'>this video presentation</a>
+    for an overview of audio rendering stack.
+  </p>
+  <p>
+    This sample requires <a href='https://web.dev/cross-origin-isolation-guide'>
+    cross origin isolation</a> to use
+    <span class='monospace'>SharedArrayBuffer</span>. You may use
+    <span class='monospace'>node server.js</span> to host this sample locally
+    with the appropriate HTTP headers.
+  </p>
+  <div id=controls>
+    <p>
+      Video Codec:
+      <label for="video_codec_h264">
+        <input id="video_codec_h264" type="radio" name="video_codec" value="avc" checked> H.264
+      </label>
+      <label for="video_codec_h265">
+        <input id="video_codec_h265" type="radio" name="video_codec" value="hevc"> H.265
+      </label>
+      <label for="video_codec_vp8">
+        <input id="video_codec_vp8" type="radio" name="video_codec" value="vp8"> VP8
+      </label>
+      <label for="video_codec_vp9">
+        <input id="video_codec_vp9" type="radio" name="video_codec" value="vp9"> VP9
+      </label>
+      <label for="video_codec_av1">
+        <input id="video_codec_av1" type="radio" name="video_codec" value="av1"> AV1
+      </label>
+    </p>
+    <button>Play</button>
+  </div>
+  <canvas width=1280 height=720></canvas>
+</div>
+<script type="module">
+window.$ = document.querySelector.bind(document);
+let canvas = $("canvas");
+let offscreenCanvas = canvas.transferControlToOffscreen();
+
+// Instantiate the "media worker" and start loading the files. The worker will
+// house and drive the demuxers and decoders.
+let mediaWorker = new Worker('./media_worker.js');
+
+let initDone = false;
+
+let playButton = $('button');
+playButton.onclick = async () => {
+  if (!initDone) {
+    document.querySelectorAll("input[name=\"video_codec\"]").forEach(input => input.disabled = true);
+    playButton.innerText = "Loading...";
+    playButton.disabled = true;
+
+    // Wait for worker initialization.
+    await new Promise(resolve => {
+      const videoCodec = `${document.querySelector("input[name=\"video_codec\"]:checked").value}`;
+      mediaWorker.postMessage(
+        {
+          command: 'initialize',
+          videoFile: `../data/1000_Words.mp4`,
+          canvas: offscreenCanvas
+        },
+        { transfer: [offscreenCanvas] }
+      );
+
+      mediaWorker.addEventListener('message', (e) => {
+        console.assert(e.data.command == 'initialize-done');
+        initDone = true;
+        resolve();
+      });
+    });
+    playButton.innerText = "Play";
+    playButton.disabled = false;
+  }
+  
+  // Enable play now that we're loaded
+  if (playButton.innerText == "Play") {
+    console.log("playback start");
+
+    mediaWorker.postMessage({
+        command: 'play'
+    });
+
+    playButton.innerText = "Pause";
+
+  } else {
+    console.log("playback pause");
+
+    mediaWorker.postMessage({command: 'pause'});
+
+    playButton.innerText = "Play"
+  }
+}
+</script>
+</html>

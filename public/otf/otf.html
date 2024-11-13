@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>WebCodecs MP4 Decode - 1000_Words.mp4</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      margin-top: 20px;
+      max-width: 100%;
+      height: auto;
+    }
+    audio {
+      margin-top: 20px;
+      width: 100%;
+      max-width: 600px;
+    }
+  </style>
+</head>
+<body>
+  <h1>WebCodecs MP4 Decode - 1000_Words.mp4</h1>
+  
+  <!-- Canvas for video rendering -->
+  <canvas id="video-canvas"></canvas>
+  
+  <!-- Audio playback controls -->
+  <audio id="audio-player" controls preload="auto">
+    <source src="/video/1000_Words.mp4" type="audio/mp4" />
+    <p>如果您的浏览器不支持音频，请使用更新版本。</p>
+  </audio>
+  
+  <!-- Main thread JavaScript -->
+  <script type="module">
+    const audio = document.querySelector("#audio-player");
+    const canvas = document.querySelector("#video-canvas");
+    let worker = null;
+    let updateAnimationFrameId = null;
+    let rendererInstance = null;
+    
+    // Worker 代码作为字符串
+    const workerCode = `
+      importScripts("https://unpkg.com/mp4box@0.3.23/dist/mp4box.all.min.js");
+      
+      // ====== MP4 Demuxer Implementation ======
+      class MP4FileSink {
+        constructor(file, setStatus) {
+          this.file = file;
+          this.setStatus = setStatus;
+          this.offset = 0;
+          console.log("MP4FileSink initialized.");
+        }
+      
+        write(chunk) {
+          this.setStatus("fetch", \`\${(this.offset / (1024 ** 2)).toFixed(1)} MiB\`);
+          if (!chunk.fileStart) {
+            chunk.fileStart = this.offset;
+          }
+          this.offset += chunk.byteLength;
+          this.file.appendBuffer(chunk);
+        }
+      
+        close() {
+          console.log("MP4FileSink closing and flushing the file.");
+          this.setStatus("fetch", "完成");
+          this.file.flush();
+        }
+      }
+      
+      class MP4Demuxer {
+        constructor(uri, { onConfig, onChunk, setStatus }) {
+          this.onConfig = onConfig;
+          this.onChunk = onChunk;
+          this.setStatus = setStatus;
+      
+          console.log("MP4Demuxer initialized with URI:", uri);
+      
+          this.file = MP4Box.createFile();
+          this.file.onError = error => {
+            console.error("MP4Demuxer error:", error);
+            this.setStatus("demux", error);
+          };
+          this.file.onReady = this.onReady.bind(this);
+          this.file.onSamples = this.onSamples.bind(this);
+      
+          this.fetchStream(uri);
+        }
+      
+        fetchStream(uri) {
+          fetch(uri).then(response => {
+            if (!response.body) {
+              throw new Error("ReadableStream not yet supported in this browser.");
+            }
+            const reader = response.body.getReader();
+            const readChunk = ({ done, value }) => {
+              if (done) {
+                this.file.flush();
+                return;
+              }
+              if (value) {
+                const buffer = new Uint8Array(value).buffer;
+                buffer.fileStart = this.file.nextParsePosition;
+                this.file.appendBuffer(buffer);
+              }
+              reader.read().then(readChunk);
+            };
+            reader.read().then(readChunk);
+          }).catch(error => {
+            console.error("MP4Demuxer fetch error:", error);
+            this.setStatus("fetch", error.message || error);
+          });
+        }
+      
+        onReady(info) {
+          console.log("MP4Demuxer ready with info:", info);
+          this.setStatus("demux", "准备就绪");
+          const track = info.videoTracks[0];
+          if (!track) {
+            this.setStatus("demux", "未找到视频轨道");
+            return;
+          }
+      
+          let codec = '';
+          if (track.codec.startsWith('vp08')) {
+            codec = 'vp8';
+          } else if (track.codec.startsWith('avc1')) {
+            codec = 'avc1';
+          } else if (track.codec.startsWith('hev1') || track.codec.startsWith('hvc1')) {
+            codec = 'hvc1';
+          } else if (track.codec.startsWith('av01')) {
+            codec = 'av01';
+          } else {
+            codec = track.codec; // 直接使用原始 codec 字符串
+          }
+      
+          const config = {
+            codec: codec,
+            codedHeight: track.video.height,
+            codedWidth: track.video.width,
+            description: this.getDescription(track),
+          };
+          if (!config.description) {
+            console.error("Failed to get track description. Decoder may fail to initialize properly.");
+          }
+          this.onConfig(config);
+          this.file.setExtractionOptions(track.id);
+          this.file.start();
+        }
+      
+        onSamples(track_id, ref, samples) {
+          for (const sample of samples) {
+            if (!sample.data || sample.data.byteLength === 0) {
+              console.error("Sample data is null or empty, skipping frame.");
+              continue;
+            }
+            const chunk = new EncodedVideoChunk({
+              type: sample.is_sync ? "key" : "delta",
+              timestamp: (sample.cts * 1e6) / sample.timescale,
+              duration: (sample.duration * 1e6) / sample.timescale,
+              data: sample.data
+            });
+            this.onChunk(chunk);
+          }
+        }
+      
+        getDescription(track) {
+          console.log("Fetching description for track ID:", track.id);
+          const trak = this.file.getTrackById(track.id);
+          for (const entry of trak.mdia.minf.stbl.stsd.entries) {
+            const box = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
+            if (box) {
+              if (typeof DataStream === 'undefined') {
+                throw new Error("DataStream class is not available.");
+              }
+              const stream = new DataStream(undefined, 0, DataStream.BIG_ENDIAN);
+              box.write(stream);
+              return new Uint8Array(stream.buffer, 8);
+            }
+          }
+          console.error("avcC, hvcC, vpcC, or av1C box not found, description is null.");
+          return null;
+        }
+      }
+      
+      // ====== 2D Renderer Implementation ======
+      class Canvas2DRenderer {
+        constructor(canvas) {
+          this.canvas = canvas;
+          this.ctx = canvas.getContext("2d");
+          this.currentWidth = 0;
+          this.currentHeight = 0;
+        }
+      
+        async draw(frame) {
+          if (this.currentWidth !== frame.displayWidth || this.currentHeight !== frame.displayHeight) {
+            this.canvas.width = frame.displayWidth;
+            this.canvas.height = frame.displayHeight;
+            this.currentWidth = frame.displayWidth;
+            this.currentHeight = frame.displayHeight;
+          }
+          try {
+            const imageBitmap = await frame.copyToImageBitmap();
+            this.ctx.drawImage(imageBitmap, 0, 0, frame.displayWidth, frame.displayHeight);
+            imageBitmap.close();
+          } catch (e) {
+            console.error("Error drawing frame:", e);
+          }
+          frame.close();
+        }
+      }
+      
+      // ====== Frame Timing and Rendering Mechanism ======
+      let rendererInstance = null;
+      let frameQueue = [];
+      let isPlaying = false;
+      let currentTime = 0;
+      let demuxer = null;
+      let decoder = null;
+      
+      function handleOutput(frame) {
+        frameQueue.push(frame);
+        processFrames();
+      }
+      
+      function processFrames() {
+        if (!rendererInstance || !isPlaying) return;
+      
+        while (frameQueue.length > 0) {
+          const frame = frameQueue[0];
+          const frameTime = frame.timestamp / 1e6;
+      
+          if (frameTime <= currentTime + 0.1) { // 增加同步的缓冲时间，减少跳帧现象
+            frameQueue.shift();
+            rendererInstance.draw(frame);
+          } else {
+            break;
+          }
+        }
+      }
+      
+      function start({ type, dataUri, rendererName, canvas }) {
+        if (type === 'start') {
+          if (rendererName === "2d") {
+            rendererInstance = new Canvas2DRenderer(canvas);
+          } else {
+            // 未来可以支持其他渲染器
+            rendererInstance = new Canvas2DRenderer(canvas);
+          }
+      
+          decoder = new VideoDecoder({
+            output: handleOutput,
+            error(e) {
+              console.error("Decoder error:", e);
+            }
+          });
+      
+          try {
+            demuxer = new MP4Demuxer(dataUri, {
+              onConfig(config) {
+                console.log("Decoder configured with codec:", config.codec);
+                decoder.configure(config);
+              },
+              onChunk(chunk) {
+                if (chunk.type === "key" || decoder.decodeQueueSize < 5) {
+                  // 优化逻辑：确保关键帧解码，并增加队列检查，尽量避免跳帧
+                  console.log("Decoding chunk:", chunk.type);
+                  decoder.decode(chunk);
+                } else {
+                  console.warn("Skipped non-key frame to maintain buffer stability.");
+                }
+              },
+              setStatus: (type, message) => {
+                postMessage({ type: 'status', content: \`\${type}: \${message}\` });
+              }
+            });
+          } catch (error) {
+            console.error("Demuxer initialization error:", error);
+            postMessage({ type: 'status', content: \`Error: \${error.message}\` });
+          }
+        }
+      }
+      
+      function play() {
+        if (!isPlaying) {
+          isPlaying = true;
+          postMessage({ type: 'status', content: 'Playback started.' });
+          processFrames();
+        }
+      }
+      
+      function pausePlayback() {
+        if (isPlaying) {
+          isPlaying = false;
+          postMessage({ type: 'status', content: 'Playback paused.' });
+        }
+      }
+      
+      function seek(time) {
+        console.log(\`Seeking to time: \${time} seconds\`);
+        currentTime = time;
+        frameQueue = []; // 清空帧队列，确保同步
+        if (demuxer && demuxer.file) {
+          demuxer.file.seek(time * 1000 * 1000); // MP4Box 使用微秒
+        }
+        processFrames(); // 更新画面
+        postMessage({ type: 'status', content: \`Seeked to \${time} seconds.\` });
+      }
+      
+      self.addEventListener("message", (event) => {
+        const data = event.data;
+        switch (data.type) {
+          case 'start':
+            start(data);
+            break;
+          case 'play':
+            play();
+            break;
+          case 'pause':
+            pausePlayback();
+            break;
+          case 'timeUpdate':
+            currentTime = data.currentTime;
+            processFrames();
+            break;
+          case 'seek':
+            seek(data.time);
+            break;
+        }
+      }, { passive: true });
+    `;
+    
+    // 创建 Blob URL 并初始化 Worker
+    const blob = new Blob([workerCode], { type: "application/javascript" });
+    const workerURL = URL.createObjectURL(blob);
+    worker = new Worker(workerURL);
+    
+    worker.onmessage = (event) => {
+      const message = event.data;
+      if (message.type === 'status') {
+        console.log("Worker status:", message.content);
+      }
+    };
+    
+    worker.onerror = (error) => {
+      console.error("Worker encountered an error:", error);
+    };
+    
+    // 初始化 Web Worker 并启动视频解码
+    function initWorker() {
+      console.log("Initializing Web Worker...");
+      const offscreen = canvas.transferControlToOffscreen();
+      worker.postMessage({
+        type: 'start',
+        dataUri: '/video/1000_Words.mp4',
+        rendererName: '2d',
+        canvas: offscreen
+      }, [offscreen]);
+      console.log("Worker started and message sent.");
+    }
+    
+    // 发送 currentTime 到 Worker 使用 requestAnimationFrame
+    function sendCurrentTime() {
+      if (worker && !audio.paused && !audio.ended) {
+        worker.postMessage({ type: 'timeUpdate', currentTime: audio.currentTime });
+        updateAnimationFrameId = requestAnimationFrame(sendCurrentTime);
+      } else {
+        cancelAnimationFrame(updateAnimationFrameId);
+        updateAnimationFrameId = null;
+      }
+    }
+    
+    // 同步音频和视频的帧绘制
+    function syncFrames() {
+      if (!audio.paused && !audio.ended) {
+        // 保持同步通过发送 currentTime
+        if (!updateAnimationFrameId) {
+          updateAnimationFrameId = requestAnimationFrame(sendCurrentTime);
+        }
+      }
+    }
+    
+    // 播放事件处理
+    audio.addEventListener('play', () => {
+      console.log("Audio play event triggered.");
+      if (!worker) {
+        initWorker();
+      }
+      if (!updateAnimationFrameId) {
+        updateAnimationFrameId = requestAnimationFrame(sendCurrentTime);
+      }
+      worker.postMessage({ type: 'play' });
+      console.log("Sent 'play' message to worker and started time updates.");
+    });
+    
+    // 暂停事件处理
+    audio.addEventListener('pause', () => {
+      console.log("Audio pause event triggered.");
+      if (worker) {
+        worker.postMessage({ type: 'pause' });
+      }
+      if (updateAnimationFrameId) {
+        cancelAnimationFrame(updateAnimationFrameId);
+        updateAnimationFrameId = null;
+      }
+      console.log("Sent 'pause' message to worker and stopped time updates.");
+    });
+    
+    // 音频播放结束处理
+    audio.addEventListener('ended', () => {
+      console.log("Audio ended event triggered.");
+      if (worker) {
+        worker.postMessage({ type: 'pause' });
+      }
+      if (updateAnimationFrameId) {
+        cancelAnimationFrame(updateAnimationFrameId);
+        updateAnimationFrameId = null;
+      }
+      console.log("Sent 'pause' message to worker after audio ended.");
+    });
+    
+    // 拖动音频进度条同步视频
+    audio.addEventListener('seeked', () => {
+      console.log("Audio seek event triggered");
+      if (worker) {
+        worker.postMessage({ type: 'seek', time: audio.currentTime });
+      }
+    });
+    
+    // 确保在页面卸载时终止 Worker
+    window.addEventListener('beforeunload', () => {
+      if (worker) {
+        worker.terminate();
+      }
+    });
+  </script>
+</body>
+</html>
+

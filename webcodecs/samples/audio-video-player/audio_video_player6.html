@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>WebCodecs Audio/Video Player</title>
+  <style>
+    body {
+      font-family: sans-serif;
+    }
+    #controls {
+      margin-top: 20px;
+    }
+    #seek-bar {
+      width: 100%;
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <h1>WebCodecs Audio/Video Player</h1>
+  <canvas></canvas>
+  <div id="controls">
+    <button>Play</button>
+    <label for="volume">Volume</label>
+    <input id="volume" type="range" min="0" max="1" step="0.1" value="1">
+    <br>
+    <label for="seek-bar">Progress</label>
+    <input id="seek-bar" type="range" value="0" min="0" max="100" step="0.1" disabled></input>
+  </div>
+  <script type="module">
+    import { WebAudioController } from "../lib/web_audio_controller.js";
+
+    window.$ = document.querySelector.bind(document);
+
+    let canvas = $("canvas");
+    let offscreenCanvas = canvas.transferControlToOffscreen();
+
+    let mediaWorker = new Worker('./media_worker.js');
+
+    let initDone = false;
+    let totalDuration = 0;
+
+    let audioController = new WebAudioController();
+    $('#volume').onchange = (e) => { audioController.setVolume(e.target.value); }
+
+    let playButton = $('button');
+    playButton.onclick = async () => {
+      if (!initDone) {
+        playButton.innerText = "Loading...";
+        playButton.disabled = true;
+
+        await new Promise(resolve => {
+          mediaWorker.postMessage(
+            {
+              command: 'initialize',
+              audioFile: '../data/1000_Words.mp4',
+              videoFile: '../data/1000_Words.mp4',
+              canvas: offscreenCanvas
+            },
+            { transfer: [offscreenCanvas] }
+          );
+
+          mediaWorker.addEventListener('message', (e) => {
+            if (e.data.command == 'initialize-done') {
+              audioController.initialize(e.data.sampleRate, e.data.channelCount, e.data.sharedArrayBuffer);
+              totalDuration = e.data.duration;
+              $('#seek-bar').max = totalDuration;
+              $('#seek-bar').disabled = false;
+              initDone = true;
+              playButton.innerText = "Play";
+              playButton.disabled = false;
+              $('#volume').disabled = false;
+              resolve();
+            }
+          });
+        });
+      }
+
+      if (playButton.innerText == "Play") {
+        console.log("playback start");
+
+        audioController.play().then(() => {
+          console.log('playback started');
+          updateProgressBar();
+        });
+        mediaWorker.postMessage({
+            command: 'play',
+            mediaTimeSecs: audioController.getMediaTimeInSeconds(),
+            mediaTimeCapturedAtHighResTimestamp:
+                performance.now() + performance.timeOrigin
+        });
+
+        sendMediaTimeUpdates(true);
+
+        playButton.innerText = "Pause";
+
+      } else {
+        console.log("playback pause");
+        audioController.pause().then(() => {
+          console.log("playback paused");
+          mediaWorker.postMessage({command: 'pause'});
+        });
+
+        sendMediaTimeUpdates(false);
+
+        playButton.innerText = "Play"
+      }
+    }
+
+    $('#seek-bar').oninput = (e) => {
+      let seekTime = parseFloat(e.target.value);
+
+      audioController.pause();
+      mediaWorker.postMessage({command: 'pause'});
+
+      mediaWorker.postMessage({
+        command: 'seek',
+        seekTime: seekTime
+      });
+
+      audioController.seek(seekTime);
+
+      audioController.play().then(() => {
+        console.log('playback resumed after seeking');
+        updateProgressBar();
+      });
+      mediaWorker.postMessage({
+        command: 'play',
+        mediaTimeSecs: seekTime,
+        mediaTimeCapturedAtHighResTimestamp:
+            performance.now() + performance.timeOrigin
+      });
+    };
+
+    function updateProgressBar() {
+      if (!initDone || !audioController.isPlaying()) {
+        return;
+      }
+      let currentTime = audioController.getMediaTimeInSeconds();
+      $('#seek-bar').value = currentTime;
+      requestAnimationFrame(updateProgressBar);
+    }
+
+    let mediaTimeUpdateInterval = null;
+    function sendMediaTimeUpdates(enabled) {
+      if (enabled) {
+        const UPDATE_INTERVAL = 1000;
+        mediaTimeUpdateInterval = setInterval(() => {
+          mediaWorker.postMessage({
+              command: 'update-media-time',
+              mediaTimeSecs: audioController.getMediaTimeInSeconds(),
+              mediaTimeCapturedAtHighResTimestamp:
+                  performance.now() + performance.timeOrigin
+          });
+        }, UPDATE_INTERVAL);
+      } else {
+        clearInterval(mediaTimeUpdateInterval);
+        mediaTimeUpdateInterval = null;
+      }
+    }
+  </script>
+</body>
+</html>
+

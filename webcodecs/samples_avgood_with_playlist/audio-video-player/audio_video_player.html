@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <title>音视频播放器</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        color: #444;
+        font-weight: 300;
+        font-size: larger;
+      }
+      button {
+        font-size: larger;
+        margin-left: 10px;
+      }
+      #controls {
+        margin-bottom: 10px;
+      }
+      #loading {
+        font-size: 2em;
+      }
+      .monospace {
+        font-family: monospace;
+      }
+      div#container {
+        margin: 0 auto;
+        max-width: 60em;
+        padding: 1em 1.5em;
+      }
+      canvas {
+        outline: 1px solid black;
+      }
+      audio {
+        margin-top: 20px;
+        width: 100%;
+        max-width: 600px;
+      }
+    </style>
+</head>
+<body>
+<div id="container">
+  <p>
+    这个示例结合了 WebCodecs 和 audio标签 来创建一个媒体播放器，实现同步的音频和视频播放。
+  </p>
+    
+  <!-- 音频播放控件 -->
+  <audio id="audio-player" controls preload="auto">
+    <source id="audio-source" src="" type="audio/mp4" />
+    <p>如果您的浏览器不支持音频，请使用更新的版本。</p>
+  </audio>
+  <!-- 下一集按钮 -->
+  <button id="next-button">下一集</button>
+
+  <!-- 视频渲染画布 -->
+  <canvas width="1280" height="720"></canvas>
+</div>
+<script type="module">
+  window.$ = document.querySelector.bind(document);
+  let canvas = $("canvas");
+  let offscreenCanvas = canvas.transferControlToOffscreen();
+
+  // 获取音频播放器和音频源
+  let audioPlayer = $("#audio-player");
+  let audioSource = $("#audio-source");
+
+  // 获取下一集按钮
+  let nextButton = $("#next-button");
+
+  // 创建媒体工作线程
+  let mediaWorker = new Worker('./media_worker.js');
+  let initDone = false;
+
+  // 获取URL参数，动态设置视频文件名
+  const urlParams = new URLSearchParams(window.location.search);
+  let videoFileName = urlParams.get('videoFile') || '1000_Words.mp4'; // 默认文件名
+  let audioFileName = videoFileName; // 使用相同的文件名作为音频文件名
+
+  // 视频文件列表
+  let videoFiles = [];
+
+  // 加载视频文件列表
+  fetch('../data/video_files.json')
+    .then(response => response.json())
+    .then(data => {
+      videoFiles = data;
+      // 初始化播放器
+      initializePlayer();
+    })
+    .catch(error => {
+      console.error('无法加载视频文件列表:', error);
+    });
+
+  // 初始化播放器
+  function initializePlayer() {
+    // 设置音频源
+    audioSource.src = `../data/${audioFileName}`;
+    audioPlayer.load(); // 加载新的音频源
+
+    // 向媒体工作线程发送初始化命令
+    mediaWorker.postMessage(
+      {
+        command: 'initialize',
+        videoFile: `../data/${videoFileName}` // 使用当前的视频文件名
+        // 不需要再次传递 canvas
+      }
+    );
+
+    // 设置标志位，避免重复初始化
+    initDone = true;
+
+    // 监听音频事件
+    setupAudioPlayerEvents();
+  }
+
+  // 监听媒体工作线程的消息
+  mediaWorker.addEventListener('message', (e) => {
+    if (e.data.command === 'initialize-done') {
+      console.info('媒体工作线程初始化完成');
+    }
+  });
+
+  // 设置音频播放器的事件监听器
+  function setupAudioPlayerEvents() {
+    // 清除之前的事件监听器，防止重复绑定
+    audioPlayer.onplay = null;
+    audioPlayer.onpause = null;
+    audioPlayer.ontimeupdate = null;
+    audioPlayer.onended = null;
+
+    // 监听音频播放事件
+    audioPlayer.addEventListener('play', () => {
+      if (initDone) {
+        mediaWorker.postMessage({ command: 'play' });
+      }
+    });
+
+    // 监听音频暂停事件
+    audioPlayer.addEventListener('pause', () => {
+      if (initDone) {
+        mediaWorker.postMessage({ command: 'pause' });
+      }
+    });
+
+    // 监听音频时间更新事件
+    audioPlayer.addEventListener('timeupdate', () => {
+      if (initDone) {
+        mediaWorker.postMessage({ command: 'seek', currentTime: audioPlayer.currentTime });
+      }
+    });
+
+    // 监听音频结束事件
+    audioPlayer.addEventListener('ended', () => {
+      if (initDone) {
+        mediaWorker.postMessage({ command: 'pause' });
+      }
+    });
+  }
+
+  // 页面加载时，将 OffscreenCanvas 传递给媒体工作线程
+  mediaWorker.postMessage(
+    {
+      command: 'setupCanvas',
+      canvas: offscreenCanvas
+    },
+    [offscreenCanvas]
+  );
+
+  // 下一集按钮点击事件
+  nextButton.addEventListener('click', () => {
+    // 找到当前视频文件在列表中的索引
+    const currentIndex = videoFiles.indexOf(videoFileName);
+    if (currentIndex >= 0 && currentIndex < videoFiles.length - 1) {
+      // 获取下一集的文件名
+      videoFileName = videoFiles[currentIndex + 1];
+      audioFileName = videoFileName;
+      // 停止当前播放
+      audioPlayer.pause();
+      // 重置音频播放器的播放时间
+      audioPlayer.currentTime = 0;
+
+      // 重新初始化播放器
+      initializePlayer();
+
+      // 自动播放下一集
+      audioPlayer.play();
+    } else {
+      alert('已经是最后一集了');
+    }
+  });
+
+</script>
+</body>
+</html>

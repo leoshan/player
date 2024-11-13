@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Video List</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            color: #444;
+            font-weight: 300;
+        }
+        ul {
+            list-style-type: none;
+        }
+        li {
+            margin: 10px 0;
+        }
+        a {
+            text-decoration: none;
+            color: blue;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <h1>Video List</h1>
+    <ul id="video-list"></ul>
+
+    <script>
+        async function loadVideos() {
+            // 替换为实际的 MP4 文件路径
+            const response = await fetch('../data/video_files.json');
+            const videoFiles = await response.json();
+            const videoList = document.getElementById('video-list');
+
+            videoFiles.forEach(file => {
+                const listItem = document.createElement('li');
+                const link = document.createElement('a');
+                link.textContent = file;
+                link.href = `audio_video_player.html?videoFile=${file}`; // 传递视频文件名
+                listItem.appendChild(link);
+                videoList.appendChild(listItem);
+            });
+        }
+
+        loadVideos();
+    </script>
+</body>
+</html>

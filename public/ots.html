@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>WebCodecs MP4 Decode with Audio Element and Main Thread Rendering</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      margin-top: 20px;
+      max-width: 100%;
+      height: auto;
+    }
+    audio {
+      margin-top: 20px;
+      width: 100%;
+      max-width: 600px;
+    }
+  </style>
+</head>
+<body>
+  <h1>WebCodecs MP4 Decode with Audio Element and Main Thread Rendering</h1>
+  
+  <!-- 用于视频渲染的 Canvas -->
+  <canvas id="video-canvas"></canvas>
+  
+  <!-- 音频播放控件 -->
+  <audio id="audio-player" controls preload="auto">
+    <source src="/video/1000_Words.mp4" type="audio/mp4" />
+    <p>如果您的浏览器不支持音频，请使用更新的版本。</p>
+  </audio>
+  
+  <!-- 主线程 JavaScript -->
+  <script type="module">
+    const audio = document.getElementById("audio-player");
+    const canvas = document.getElementById("video-canvas");
+    const ctx = canvas.getContext("2d");
+    let worker = null;
+    let frameQueue = [];
+    let isPlaying = false;
+
+    // 初始化 Web Worker 并启动视频解码
+    function initWorker() {
+      console.log("Initializing Web Worker...");
+      worker = new Worker("./play.js");
+      
+      worker.onmessage = (event) => {
+        const message = event.data;
+        if (message.type === 'frame') {
+          // 从 Worker 接收 ImageBitmap 并添加到帧队列
+          frameQueue.push({
+            timestamp: message.timestamp,
+            imageBitmap: message.imageBitmap
+          });
+          processFrames();
+        } else if (message.type === 'config') {
+          // 根据视频配置设置 Canvas 大小
+          canvas.width = message.config.displayWidth || message.config.codedWidth;
+          canvas.height = message.config.displayHeight || message.config.codedHeight;
+        } else if (message.type === 'status') {
+          console.log("Worker status:", message.content);
+        }
+      };
+      
+      worker.onerror = (error) => {
+        console.error("Worker error:", error);
+      };
+      
+      worker.postMessage({
+        type: 'start',
+        dataUri: '/video/1000_Words.mp4',
+      });
+      console.log("Worker started and message sent.");
+    }
+
+    function processFrames() {
+      if (!isPlaying) return;
+
+      requestAnimationFrame(() => {
+        if (frameQueue.length === 0) return;
+
+        const currentTime = audio.currentTime;
+
+        // 找到与当前音频时间最接近的帧
+        while (frameQueue.length > 0) {
+          const frame = frameQueue[0];
+          const frameTime = frame.timestamp / 1e6;
+
+          if (frameTime <= currentTime + 0.04) { // 40ms 容差
+            // 渲染帧
+            ctx.drawImage(frame.imageBitmap, 0, 0, canvas.width, canvas.height);
+            frame.imageBitmap.close(); // 释放 ImageBitmap
+            frameQueue.shift(); // 从队列中移除帧
+          } else {
+            break;
+          }
+        }
+
+        // 继续处理帧
+        if (isPlaying) {
+          processFrames();
+        }
+      });
+    }
+
+    // 播放事件处理
+    audio.addEventListener('play', () => {
+      console.log("Audio play event triggered.");
+      if (!worker) {
+        initWorker();
+      }
+      isPlaying = true;
+      if (worker) {
+        worker.postMessage({ type: 'play' });
+      }
+      processFrames();
+    });
+
+    // 暂停事件处理
+    audio.addEventListener('pause', () => {
+      console.log("Audio pause event triggered.");
+      isPlaying = false;
+      if (worker) {
+        worker.postMessage({ type: 'pause' });
+      }
+    });
+
+    // 音频播放结束处理
+    audio.addEventListener('ended', () => {
+      console.log("Audio ended event triggered.");
+      isPlaying = false;
+      if (worker) {
+        worker.postMessage({ type: 'pause' });
+      }
+    });
+  </script>
+</body>
+</html>
+

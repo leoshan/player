@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>WebCodecs MP4 Decode with Audio Element and Main Thread Rendering</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      margin-top: 20px;
+      max-width: 100%;
+      height: auto;
+    }
+    audio {
+      margin-top: 20px;
+      width: 100%;
+      max-width: 600px;
+    }
+  </style>
+  <script src="./mp4box.all.min.js"></script>
+</head>
+<body>
+  <h1>WebCodecs MP4 Decode with Audio Element and Main Thread Rendering</h1>
+  
+  <!-- 用于视频渲染的 Canvas -->
+  <canvas id="video-canvas"></canvas>
+  
+  <!-- 音频播放控件 -->
+  <audio id="audio-player" controls preload="auto">
+    <source src="/video/1000_Words.mp4" type="audio/mp4" />
+    <p>如果您的浏览器不支持音频，请使用更新的版本。</p>
+  </audio>
+  
+  <!-- 主线程 JavaScript -->
+  <script type="module">
+    const audio = document.getElementById("audio-player");
+    const canvas = document.getElementById("video-canvas");
+    const ctx = canvas.getContext("2d");
+    let videoDecoder = null;
+    let mp4boxFile = MP4Box.createFile();
+    let readySamples = [];
+    let isPlaying = false;
+    let nextFrameTime = 0;
+
+    // 初始化 MP4 Demuxer 和 VideoDecoder
+    async function initDecoder() {
+      const response = await fetch('/video/1000_Words.mp4');
+      const reader = response.body.getReader();
+
+      mp4boxFile.onReady = function (info) {
+        const videoTrack = info.videoTracks[0];
+        const config = {
+          codec: videoTrack.codec,
+          codedWidth: videoTrack.video.width,
+          codedHeight: videoTrack.video.height,
+          description: getTrackDescription(videoTrack),
+        };
+
+        if (videoDecoder) {
+          videoDecoder.close(); // 关闭之前的解码器
+        }
+
+        videoDecoder = new VideoDecoder({
+          output: handleVideoFrame,
+          error: (error) => {
+            console.error("Decoder error:", error);
+            videoDecoder = null; // 标记解码器为关闭状态
+          },
+        });
+
+        VideoDecoder.isConfigSupported(config).then((support) => {
+          if (support.supported) {
+            videoDecoder.configure(config);
+            canvas.width = videoTrack.video.width;
+            canvas.height = videoTrack.video.height;
+
+            mp4boxFile.setExtractionOptions(videoTrack.id);
+            mp4boxFile.start();
+          } else {
+            console.error("Video decoder configuration not supported.");
+          }
+        }).catch((error) => {
+          console.error("Error checking codec support:", error);
+        });
+      };
+
+      mp4boxFile.onSamples = function (track_id, ref, samples) {
+        readySamples.push(...samples);
+        if (isPlaying) {
+          processNextChunk();
+        }
+      };
+
+      async function readStream() {
+        let done = false;
+        while (!done) {
+          const { done: readDone, value } = await reader.read();
+          done = readDone;
+          if (value) {
+            const buffer = new ArrayBuffer(value.byteLength);
+            new Uint8Array(buffer).set(value);
+            buffer.fileStart = mp4boxFile.nextParsePosition;
+            mp4boxFile.appendBuffer(buffer);
+          }
+        }
+      }
+
+      readStream();
+    }
+
+    function handleVideoFrame(frame) {
+      if (!videoDecoder) {
+        // 如果解码器已关闭，停止处理
+        console.warn("Attempted to handle a frame but the decoder is closed.");
+        return;
+      }
+
+      if (audio.currentTime >= nextFrameTime / 1e6) {
+        ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+        nextFrameTime = frame.timestamp + frame.duration;
+      }
+      frame.close();
+
+      if (isPlaying) {
+        processNextChunk();
+      }
+    }
+
+    function getTrackDescription(track) {
+      const trak = mp4boxFile.moov.traks.find(tr => tr.tkhd.track_id === track.id);
+      const entry = trak.mdia.minf.stbl.stsd.entries[0];
+      const box = entry.avcC || entry.hvcC || entry.vpcC || entry.av1C;
+      if (!box) {
+        throw new Error("avcC, hvcC, vpcC, or av1C box not found!");
+      }
+      const buffer = new ArrayBuffer(box.size);
+      const stream = new DataStream(buffer, 0, DataStream.BIG_ENDIAN);
+      box.write(stream);
+      return new Uint8Array(buffer, 8); // 去掉盒子头部的8字节
+    }
+
+    function processNextChunk() {
+      if (videoDecoder && readySamples.length > 0 && videoDecoder.decodeQueueSize < 2) {
+        const sample = readySamples.shift();
+        try {
+          const chunk = new EncodedVideoChunk({
+            type: sample.is_sync ? "key" : "delta",
+            timestamp: (sample.cts * 1e6) / sample.timescale,
+            duration: (sample.duration * 1e6) / sample.timescale,
+            data: sample.data
+          });
+          videoDecoder.decode(chunk);
+        } catch (error) {
+          console.error("Failed to decode chunk:", error);
+          if (error.name === "InvalidStateError") {
+            // 解码器无效，可能需要重新初始化
+            videoDecoder = null;
+            initDecoder();
+          }
+        }
+      }
+    }
+
+    // 播放事件处理
+    audio.addEventListener('play', () => {
+      console.log("Audio play event triggered.");
+      if (!videoDecoder) {
+        initDecoder();
+      }
+      isPlaying = true;
+      processNextChunk();
+    });
+
+    // 暂停事件处理
+    audio.addEventListener('pause', () => {
+      console.log("Audio pause event triggered.");
+      isPlaying = false;
+    });
+
+    // 音频播放结束处理
+    audio.addEventListener('ended', () => {
+      console.log("Audio ended event triggered.");
+      isPlaying = false;
+    });
+  </script>
+</body>
+</html>

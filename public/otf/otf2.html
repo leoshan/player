@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>WebCodecs MP4 Decode - 1000_Words.mp4</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    canvas {
+      border: 1px solid #ccc;
+      margin-top: 20px;
+      max-width: 100%;
+      height: auto;
+    }
+    audio {
+      margin-top: 20px;
+      width: 100%;
+      max-width: 600px;
+    }
+    #status {
+      margin-top: 20px;
+      max-width: 600px;
+      color: red;
+    }
+  </style>
+</head>
+<body>
+  <h1>WebCodecs MP4 Decode - 1000_Words.mp4</h1>
+  
+  <!-- Canvas for video rendering -->
+  <canvas id="video-canvas"></canvas>
+  
+  <!-- Audio playback controls -->
+  <audio id="audio-player" controls preload="auto">
+    <source src="/video/1000_Words.mp4" type="audio/mp4" />
+    <p>如果您的浏览器不支持音频，请使用更新版本。</p>
+  </audio>
+  
+  <!-- Status message -->
+  <div id="status"></div>
+  
+  <!-- Main thread JavaScript -->
+  <script type="module">
+    const audio = document.querySelector("#audio-player");
+    const canvas = document.querySelector("#video-canvas");
+    const statusDiv = document.querySelector("#status");
+    let worker = null;
+    let updateIntervalId = null;
+
+    // 初始化并显示状态消息
+    function displayStatus(message) {
+      statusDiv.textContent = message;
+    }
+
+    // 初始化 Web Worker 并启动视频解码
+    function initWorker() {
+      console.log("Initializing Web Worker...");
+      const offscreen = canvas.transferControlToOffscreen();
+      try {
+        worker = new Worker("./play.js", { type: 'classic' }); // 确保以经典模式加载 Worker
+      } catch (error) {
+        console.error("Failed to initialize worker:", error);
+        displayStatus(`Worker 初始化失败: ${error.message}`);
+        return;
+      }
+
+      worker.onmessage = (event) => {
+        const message = event.data;
+        if (message.type === 'status') {
+          console.log("Worker status:", message.content);
+          // 可选：将状态消息显示在 UI 上
+          // displayStatus(message.content);
+        } else if (message.type === 'error') {
+          console.error("Worker reported error:", message.content);
+          displayStatus(`解码错误: ${message.content}`);
+        }
+      };
+      
+      worker.onerror = (error) => {
+        console.error("Worker error:", error);
+        displayStatus(`Worker 错误: ${error.message}`);
+      };
+      
+      worker.postMessage({
+        type: 'start',
+        dataUri: '/video/1000_Words.mp4',
+        rendererName: '2d',
+        canvas: offscreen
+      }, [offscreen]);
+      console.log("Worker 启动并发送消息。");
+    }
+
+    // 发送当前播放时间到 Worker
+    function sendCurrentTime() {
+      if (worker && !audio.paused && !audio.ended) {
+        worker.postMessage({ type: 'timeUpdate', currentTime: audio.currentTime });
+      }
+    }
+
+    // 播放事件处理
+    audio.addEventListener('play', () => {
+      console.log("Audio 播放事件触发。");
+      if (!worker) {
+        initWorker();
+      }
+      if (!updateIntervalId) {
+        updateIntervalId = setInterval(sendCurrentTime, 100); // 每0.1秒发送一次时间更新
+      }
+      worker.postMessage({ type: 'play' });
+      console.log("发送 'play' 消息到 Worker 并启动时间更新。");
+    });
+
+    // 暂停事件处理
+    audio.addEventListener('pause', () => {
+      console.log("Audio 暂停事件触发。");
+      if (worker) {
+        worker.postMessage({ type: 'pause' });
+      }
+      if (updateIntervalId) {
+        clearInterval(updateIntervalId);
+        updateIntervalId = null;
+      }
+      console.log("发送 'pause' 消息到 Worker 并停止时间更新。");
+    });
+
+    // 音频播放结束处理
+    audio.addEventListener('ended', () => {
+      console.log("Audio 结束事件触发。");
+      if (worker) {
+        worker.postMessage({ type: 'pause' });
+        worker.terminate();
+        worker = null;
+      }
+      if (updateIntervalId) {
+        clearInterval(updateIntervalId);
+        updateIntervalId = null;
+      }
+      console.log("发送 'pause' 消息到 Worker 后终止 Worker。");
+    });
+
+    // 处理页面卸载，确保 Worker 被终止
+    window.addEventListener('beforeunload', () => {
+      if (worker) {
+        worker.terminate();
+        worker = null;
+      }
+    });
+  </script>
+</body>
+</html>
+

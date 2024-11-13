@@ -1,0 +1,112 @@
+<!doctype html>
+<head>
+    <meta charset="UTF-8">
+    <title>您的标题</title>
+</head>
+<style>
+  body {
+    font-family: sans-serif;
+    color: #444;
+    font-weight: 300;
+    font-size: larger;
+  }
+  button {
+    font-size: larger;
+  }
+  #controls {
+    margin-bottom: 10px;
+  }
+  #loading {
+    font-size: 2em;
+  }
+  .monospace {
+    font-family: monospace;
+  }
+  div#container {
+    margin: 0 auto 0 auto;
+    max-width: 60em;
+    padding: 1em 1.5em 1.3em 1.5em;
+  }
+  canvas {
+    outline: 1px solid black;
+  }
+  audio {
+      margin-top: 20px;
+      width: 100%;
+      max-width: 600px;
+    }
+</style>
+<div id="container">
+  <p>
+    这个示例结合了 WebCodecs 和 audio标签 来创建一个媒体播放器，实现同步的音频和视频播放。
+  </p>
+    
+  <!-- 音频播放控件 -->
+  <audio id="audio-player" controls preload="auto">
+    <source src="../data/1000_Words.mp4" type="audio/mp4" />
+    <p>如果您的浏览器不支持音频，请使用更新的版本。</p>
+  </audio>
+
+  <!-- 视频渲染画布 -->
+  <canvas width="1280" height="720"></canvas>
+</div>
+<script type="module">
+  window.$ = document.querySelector.bind(document);
+  let canvas = $("canvas");
+  let offscreenCanvas = canvas.transferControlToOffscreen();
+
+  // 获取音频播放器
+  let audioPlayer = $("#audio-player");
+
+  // 创建媒体工作线程
+  let mediaWorker = new Worker('./media_worker.js');
+
+  let initDone = false;
+
+  // 初始化工作线程
+  mediaWorker.postMessage(
+    {
+      command: 'initialize',
+      videoFile: `../data/1000_Words.mp4`,
+      canvas: offscreenCanvas
+    },
+    { transfer: [offscreenCanvas] }
+  );
+
+  // 监听工作线程初始化完成
+  mediaWorker.addEventListener('message', (e) => {
+    if (e.data.command === 'initialize-done') {
+      initDone = true;
+      console.info('媒体工作线程初始化完成');
+    }
+  });
+
+  // 监听音频播放事件
+  audioPlayer.addEventListener('play', () => {
+    if (initDone) {
+      mediaWorker.postMessage({ command: 'play' });
+    }
+  });
+
+  // 监听音频暂停事件
+  audioPlayer.addEventListener('pause', () => {
+    if (initDone) {
+      mediaWorker.postMessage({ command: 'pause' });
+    }
+  });
+
+  // 监听音频时间更新事件
+  audioPlayer.addEventListener('timeupdate', () => {
+    if (initDone) {
+      mediaWorker.postMessage({ command: 'seek', currentTime: audioPlayer.currentTime });
+    }
+  });
+
+  // 监听音频结束事件
+  audioPlayer.addEventListener('ended', () => {
+    if (initDone) {
+      mediaWorker.postMessage({ command: 'pause' });
+    }
+  });
+</script>
+</html>

@@ -1,0 +1,57 @@
+<!doctype html>
+<style>
+  /* Styles omitted for brevity */
+</style>
+<div id="container">
+  <p>This sample uses WebCodecs to create a media player that renders video.</p>
+  <canvas width="1280" height="720"></canvas>
+</div>
+<script type="module">
+let canvas = document.querySelector("canvas");
+let offscreenCanvas = canvas.transferControlToOffscreen();
+let mediaWorker = new Worker('./media_worker.js');
+let initDone = false;
+
+let playButton = document.createElement("button");
+playButton.innerText = "Play";
+playButton.onclick = async () => {
+  if (!initDone) {
+    playButton.innerText = "Loading...";
+    playButton.disabled = true;
+
+    await new Promise(resolve => {
+      mediaWorker.postMessage({
+        command: 'initialize',
+        videoFile: `../data/1000_Words.mp4`,
+        canvas: offscreenCanvas
+      }, { transfer: [offscreenCanvas] });
+
+      mediaWorker.addEventListener('message', (e) => {
+        console.assert(e.data.command == 'initialize-done');
+        initDone = true;
+        resolve();
+      });
+    });
+
+    playButton.innerText = "Play";
+    playButton.disabled = false;
+  }
+
+  if (playButton.innerText == "Play") {
+    console.log("playback start");
+    mediaWorker.postMessage({
+        command: 'play',
+        mediaTimeSecs: 0,
+        mediaTimeCapturedAtHighResTimestamp: performance.now() + performance.timeOrigin
+    });
+    playButton.innerText = "Pause";
+  } else {
+    console.log("playback pause");
+    mediaWorker.postMessage({command: 'pause'});
+    playButton.innerText = "Play";
+  }
+};
+
+document.body.appendChild(playButton);
+</script>
+</html>
