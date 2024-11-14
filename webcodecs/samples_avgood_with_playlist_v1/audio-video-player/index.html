@@ -1,0 +1,133 @@
+<html>
+  <head>
+    <meta charset="UTF-8">
+    <title>Fake MP3 Player (With Video Content)</title>
+    <style>
+      /* 设置 canvas 宽度和高度 */
+      canvas {
+        display: block;
+        margin: 0 auto;
+        width: 640px;
+        height: 360px;
+        background-color: black;
+      }
+
+      /* 音频控制条样式 */
+      #fake-mp3-player {
+        display: block;
+        margin: 20px auto; /* 确保音频控制条在 canvas 下方并居中 */
+        width: 640px;
+      }
+    </style>
+  </head>
+  <body>
+
+    <h1>伪装成 MP3 实际播放 MP4</h1>
+
+    <!-- 通过 canvas 渲染视频内容 -->
+    <canvas id="video-canvas"></canvas>
+
+    <!-- 音频控制条 -->
+    <audio id="fake-mp3-player" controls preload="auto">
+      <source src="../data/1000_Words.mp4" type="audio/mpeg" />
+      <p>如果您的浏览器不支持音频，请使用更新版本。</p>
+    </audio>
+
+    <!-- 隐藏的视频标签，用于播放视频并绘制到 canvas -->
+    <video id="hidden-video" src="../data/1000_Words.mp4" style="display:none;" playsinline muted crossorigin="anonymous"></video>
+
+    <script>
+      // 获取音频播放器元素
+      const fakePlayer = document.getElementById('fake-mp3-player');
+      console.log("Audio player element retrieved: ", fakePlayer);
+      // 获取 canvas 元素及其绘图上下文
+      const canvas = document.getElementById('video-canvas');
+      const ctx = canvas.getContext('2d');
+      console.log("Canvas and context retrieved: ", canvas, ctx);
+      // 获取隐藏的视频元素
+      const hiddenVideo = document.getElementById('hidden-video');
+      console.log("Hidden video element retrieved: ", hiddenVideo);
+      let debounceTimeout;
+
+      // 确保 canvas 的实际宽度和高度与视频一致
+      hiddenVideo.addEventListener('loadedmetadata', function() {
+        canvas.width = hiddenVideo.videoWidth; // 设置 canvas 宽度为视频宽度
+        canvas.height = hiddenVideo.videoHeight; // 设置 canvas 高度为视频高度
+        console.log("Canvas dimensions set: ", canvas.width, canvas.height);
+      });
+
+      // 同步音频和视频播放时间
+      fakePlayer.addEventListener('play', function() {
+        hiddenVideo.currentTime = fakePlayer.currentTime; // 同步视频和音频的播放时间
+        hiddenVideo.play(); // 播放隐藏的视频
+        console.log("Hidden video play triggered, currentTime: ", hiddenVideo.currentTime);
+        drawFrame(); // 启动绘制帧函数
+      });
+
+      // 当音频暂停时，同步暂停视频
+      fakePlayer.addEventListener('pause', function() {
+        console.log("Audio pause event triggered");
+        hiddenVideo.pause();
+      });
+
+      // 音频时间更新时，确保视频与音频同步
+      fakePlayer.addEventListener('timeupdate', function() {
+        const syncThreshold = 0.1; // 设定更小的同步阈值，减少频繁调整
+        if (Math.abs(hiddenVideo.currentTime - fakePlayer.currentTime) > syncThreshold) {
+          console.log("Syncing video to audio, currentTime difference: ", Math.abs(hiddenVideo.currentTime - fakePlayer.currentTime));
+          hiddenVideo.currentTime = fakePlayer.currentTime; // 如果两者不同步，调整视频时间
+        }
+      });
+
+      // 确保画布中的视频帧在音频播放时正确更新
+      fakePlayer.addEventListener('seeked', function() {
+        console.log("Audio seek event triggered");
+        drawFrame();
+      });
+
+      // 每帧绘制到 canvas 上的函数
+      function drawFrame() {
+        if (!hiddenVideo.paused && !hiddenVideo.ended) { // 当视频未暂停或结束时
+          ctx.drawImage(hiddenVideo, 0, 0, canvas.width, canvas.height); // 将当前视频帧绘制到 canvas
+          console.log("Drawing video frame to canvas");
+          requestAnimationFrame(drawFrame); // 请求下一帧绘制，确保流畅播放
+        } else if (hiddenVideo.ended) { // 当视频结束时，停止绘制帧
+          console.log("Video ended, stopping frame drawing");
+          cancelAnimationFrame(drawFrame);
+        }
+      }
+
+      // 统一全屏处理函数
+      function toggleFullscreen(element) {
+        if (document.fullscreenElement) {
+          console.log("Exiting fullscreen");
+          document.exitFullscreen();
+        } else {
+          console.log("Entering fullscreen for element: ", element);
+          element.requestFullscreen();
+        }
+      }
+
+      // 双击 canvas 进入或退出全屏模式
+      canvas.addEventListener('dblclick', function() {
+        toggleFullscreen(canvas);
+      });
+
+      // 单击 canvas 暂停或播放视频，添加防抖机制防止快速点击导致重复播放/暂停
+      canvas.addEventListener('click', function() {
+        clearTimeout(debounceTimeout);
+        debounceTimeout = setTimeout(function() {
+          if (fakePlayer.paused) {
+            console.log("Playing audio from canvas click");
+            fakePlayer.play(); // 如果音频已暂停，播放音频
+          } else {
+            console.log("Pausing audio from canvas click");
+            fakePlayer.pause(); // 如果音频正在播放，暂停音频
+          }
+        }, 200); // 200ms 防抖时间
+      });
+    </script>
+
+  </body>
+</html>
+
