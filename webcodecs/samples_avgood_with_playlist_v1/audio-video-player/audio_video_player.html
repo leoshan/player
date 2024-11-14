@@ -30,6 +30,7 @@
   }
   canvas {
     outline: 1px solid black;
+    cursor: pointer; /* 增加指针光标效果 */
   }
   audio {
     margin-top: 20px;
@@ -128,6 +129,19 @@
       });
     } else {
       document.exitFullscreen();
+    }
+  });
+
+  // 添加点击事件切换播放/暂停
+  let isPlaying = false;
+  canvas.addEventListener('click', () => {
+    isPlaying = !isPlaying;
+    if (isPlaying) {
+      audioPlayer.play(); // 播放音频
+      mediaWorker.postMessage({ command: 'play' }); // 播放视频
+    } else {
+      audioPlayer.pause(); // 暂停音频
+      mediaWorker.postMessage({ command: 'pause' }); // 暂停视频
     }
   });
 </script>
